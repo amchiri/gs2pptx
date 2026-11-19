@@ -1,4 +1,93 @@
-Code googleslide => pptx
-source ~/sandbox/venv/bin/activate
+# gs2pptx
 
-encore en phase d experimentation 
+Convertit une présentation **Google Slides publiée sur le web** (lien `/d/e/2PACX-.../embed`) en fichier **PowerPoint modifiable**, même quand l'export n'est pas disponible.
+
+Chaque slide est reconstruite à partir du SVG du viewer Google :
+
+| Élément Google Slides | Résultat dans le PPTX |
+|---|---|
+| Images | Vraies images (position, taille, recadrage, rotation) |
+| Texte | Vraies zones de texte éditables (contenu, retours à la ligne, couleur, interligne) |
+| Formes | Formes libres (remplissage, contour) |
+
+Il existe aussi un mode **capture d'écran** (une image PNG par slide) qui sert de solution de repli.
+
+---
+
+## Installation
+
+Python 3.9+ requis.
+
+```bash
+pip install playwright python-pptx
+playwright install chromium
+```
+
+Les deux fichiers doivent être dans le même dossier :
+
+```
+gs2pptx.py      # script principal (navigation, téléchargement, assemblage du PPTX)
+svg2slide.py    # convertisseur SVG -> slide python-pptx
+```
+
+## Utilisation
+
+```bash
+python gs2pptx.py
+```
+
+Colle le lien de la présentation publiée quand le script le demande :
+
+```
+Enter your link: https://docs.google.com/presentation/d/e/2PACX-.../embed
+```
+
+Une fenêtre Chromium s'ouvre et parcourt les slides une par une. À la fin :
+
+```
+presentation.pptx                 # le PowerPoint modifiable
+mes_diapos/
+└── svg/
+    ├── 1.svg, 2.svg, ...         # SVG de chaque slide, liens d'images en local
+    └── images/
+        └── <hash>.jpg/png/webp   # chaque image n'est stockée qu'une fois
+```
+
+## Configuration
+
+En haut de `gs2pptx.py` :
+
+| Variable | Défaut | Rôle |
+|---|---|---|
+| `EDITABLE` | `True` | `True` = PPTX modifiable, `False` = une capture PNG par slide |
+| `SAVE_SVG` | `True` | Écrit les SVG de chaque slide avec leurs images en local |
+
+## Fonctionnement
+
+1. **Liste des slides** : le script lit `window.viewerData.docData` dans la page du viewer pour récupérer l'id de chaque slide.
+2. **Navigation** : il ouvre `.../embed?start=false&loop=false#slide=id.<id>` et attend le SVG dont le `<g>` racine porte cet id, pour ne jamais capturer la slide précédente.
+3. **Sérialisation** : il récupère le SVG avec `XMLSerializer`, qui conserve les namespaces `xmlns` / `xmlns:xlink`.
+4. **Conversion** (`svg2slide.py`) :
+   - les `matrix(...)` des groupes sont cumulées pour obtenir les positions absolues ;
+   - le repère 960×540 du SVG correspond à une slide de 10 × 5,625 in (1 unité = 9525 EMU) ;
+   - le viewer ne fournit pas de vrai texte : il dessine les lettres sous forme de tracés (`<path>`). Le texte est récupéré dans le `aria-label` du groupe d'accessibilité `<g id="a11y-...">`, qui donne aussi le rectangle de la zone. La couleur et l'interligne sont mesurés sur les tracés des lettres ;
+   - les `<path>` visibles deviennent des formes libres, et les courbes sont découpées en petits segments droits.
+5. **Images** (`ImageManager`) : téléchargées via `page.request`, qui réutilise la session du navigateur. Chaque URL n'est téléchargée qu'une fois, et les fichiers sont nommés d'après le hash SHA-1 de leur contenu, donc aucun doublon sur le disque.
+
+## Limites connues
+
+- **Gras et italique dans un même texte** : perdus, car le SVG ne contient que des tracés de lettres, sans indication de style. Tout le texte d'une zone a le même style.
+- **Police** : elle n'est indiquée nulle part dans le SVG, donc PowerPoint utilise sa police par défaut. Pour forcer celle du thème, ajoute `run.font.name = "..."` dans `SlideBuilder.emit_text` (`svg2slide.py`).
+- **Taille de police** : estimée à partir de l'interligne mesuré, avec environ 1 pt d'écart possible. Les positions restent fidèles.
+- **Formes** : les courbes deviennent des segments droits (à peine visible) et les arcs `A` sont approximés par une ligne droite. Pas de dégradés, d'ombres ni de transparence partielle.
+- **Contenus spéciaux** : les vidéos, les graphiques intégrés et les animations ne sont pas gérés.
+
+## Dépannage
+
+| Symptôme | Piste |
+|---|---|
+| Timeout sur `svg.wait_for` | L'id de `docData` ne correspond pas à l'id du `<g>` du SVG. Affiche `slide_id` et ouvre `mes_diapos/svg/<n>.svg` pour comparer. |
+| `image ignorée : HTTP 403` | La page n'a pas accès à l'image. Vérifie que le lien publié s'ouvre bien dans le navigateur lancé par Playwright. |
+| Slide vide ou incomplète | Augmente `page.wait_for_timeout(500)` dans la boucle. |
+| Texte mal placé ou mal dimensionné | Envoie le `mes_diapos/svg/<n>.svg` correspondant pour ajuster les règles de `emit_text`. |
+| Besoin d'un rendu identique à 100 % | Passe `EDITABLE = False` (capture d'écran par slide). |

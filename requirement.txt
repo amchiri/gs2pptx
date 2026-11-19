@@ -1,3 +1,4 @@
 playwright
 python-pptx
 lxml
+request
