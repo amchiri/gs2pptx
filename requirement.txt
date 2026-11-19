@@ -2,3 +2,4 @@ playwright
 python-pptx
 lxml
 request
+img2pdf

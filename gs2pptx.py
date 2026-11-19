@@ -7,6 +7,7 @@ Mettre EDITABLE = False pour revenir à l'ancien mode capture d'écran.
 from pathlib import Path
 import hashlib
 import html
+import img2pdf
 import re
 
 from playwright.sync_api import sync_playwright
@@ -15,7 +16,7 @@ from pptx.util import Inches
 
 from svg2slide import svg_to_slide
 
-EDITABLE = True
+EDITABLE = False  # True = texte éditable, False = capture d'écran
 SAVE_SVG = True  # écrit mes_diapos/svg/<n>.svg avec images locales dans svg/images/
 
 HREF_RE = re.compile(r'((?:xlink:)?href)="(https?://[^"]+)"')
@@ -105,12 +106,12 @@ class ImageManager:
 
 
 def main():
+    
+    
     link = input("Enter your link: ").strip()
 
-    dossier = Path("mes_diapos")
-    (dossier / "svg").mkdir(parents=True, exist_ok=True)
-
     prs = Presentation()
+    captures = []
     # viewBox Google = 960x540 -> 10 x 5.625 in (1 unité SVG = 9525 EMU)
     prs.slide_width = Inches(10)
     prs.slide_height = Inches(5.625)
@@ -122,12 +123,21 @@ def main():
             device_scale_factor=2,
         )
 
-        images = ImageManager(page, dossier / "svg" / "images")
+
 
         page.goto(link)
         page.wait_for_function("() => window.viewerData && window.viewerData.docData")
         diction = page.evaluate("() => window.viewerData.docData")[1]
         base = link.split("/embed")[0] + "/embed?start=false&loop=false"
+        
+        name = page.title()
+        dossier = Path(f"data/{name}")
+        (dossier / "svg").mkdir(parents=True, exist_ok=True)
+        (dossier / "svg" / "images").mkdir(parents=True, exist_ok=True)
+        output_dir = Path("output")
+        (output_dir).mkdir(parents=True, exist_ok=True)
+        images = ImageManager(page, "data" /dossier / "svg" / "images")
+
 
         for cpt, liste in enumerate(diction, start=1):
             slide_id = liste[0]
@@ -162,6 +172,7 @@ def main():
             else:
                 filename = dossier / f"{cpt}.png"
                 svg.screenshot(path=str(filename))
+                captures.append(filename)
                 slide.shapes.add_picture(
                     str(filename), 0, 0,
                     width=prs.slide_width, height=prs.slide_height,
@@ -170,7 +181,12 @@ def main():
         print("Images :", images.stats())
         browser.close()
 
-    prs.save("presentation.pptx")
+    prs.save(output_dir / f"{name}.pptx")
+    if captures:
+        layout = img2pdf.get_layout_fun((img2pdf.in_to_pt(10), img2pdf.in_to_pt(5.625)))
+        with open(output_dir / f"{name}.pdf", "wb") as f:
+            f.write(img2pdf.convert([str(c) for c in captures], layout_fun=layout))
+        print("PDF créé : presentation.pdf")
     print("PowerPoint créé : presentation.pptx")
 
 
